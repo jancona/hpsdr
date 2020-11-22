@@ -235,6 +235,11 @@ func (state *Protocol1Radio) SetSampleRate(speed uint) error {
 	return nil
 }
 
+// SetOCOut set the open collector output bits
+func (state *Protocol1Radio) SetOCOut(ocOut uint8) {
+	state.ocOut = ocOut
+}
+
 // SetTXFrequency sets the TX NCO frequency
 func (state *Protocol1Radio) SetTXFrequency(frequency uint) {
 	log.Printf("[DEBUG] SetTXFrequency: %d", frequency)
@@ -545,7 +550,8 @@ func (state *Protocol1Radio) buildEP2Frame(ep2Address byte, samples []TransmitSa
 	var tdata uint32
 	switch ep2Address {
 	case 0x00:
-		tdata |= uint32(state.speed) << 24
+		tdata |= uint32(state.speed&0b11) << 24
+		tdata |= uint32(state.ocOut&0b1111111) << 17
 		if state.rxAntenna {
 			tdata |= 1 << 13
 		}
