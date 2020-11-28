@@ -252,6 +252,17 @@ func (state *Protocol1Radio) SetRX1Frequency(frequency uint) {
 	state.rx1Frequency = uint32(frequency)
 }
 
+// GetRecieverCount gets the number of receivers
+func (state *Protocol1Radio) GetRecieverCount() int {
+	return int(state.receiverCount + 1)
+}
+
+// SetRecieverCount sets the number of receivers
+func (state *Protocol1Radio) SetRecieverCount(receiverCount byte) {
+	log.Printf("[DEBUG] SetRecieverCount: %d", receiverCount)
+	state.receiverCount = receiverCount - 1
+}
+
 // SetReceiveLNAGain sets the LNA gain. Valid values are between 0 (-12dB) and 60 (48dB)
 func (state *Protocol1Radio) SetReceiveLNAGain(gain uint) {
 	state.hl2LNAMode = true
@@ -405,26 +416,27 @@ func (state *Protocol1Radio) ReceiveSamples(outFunc func(state *Protocol1Radio, 
 	if err != nil {
 		log.Printf("ReceiveSamples: error decoding Frame1 samples: %v", err)
 	}
-	outFunc(state, s)
+	outFunc(state, s[0])
 	s, err = state.decodeSamples(mm.Frame2)
 	if err != nil {
 		log.Printf("ReceiveSamples: error decoding Frame2 samples: %v", err)
 	}
-	outFunc(state, s)
+	outFunc(state, s[0])
 	// log.Printf("[DEBUG] ReceiveSamples: %#v", *mm)
 }
 
 type ep6Data struct {
-	Sync    [3]byte
-	C0      byte
-	C1      byte
-	C2      byte
-	C3      byte
-	C4      byte
-	Samples [samplesPerFrame]ReceiverSample
+	Sync       [3]byte
+	C0         byte
+	C1         byte
+	C2         byte
+	C3         byte
+	C4         byte
+	SampleData [samplesPerFrame * 8]byte
+	// Samples [samplesPerFrame]ReceiverSample
 }
 
-func (state *Protocol1Radio) decodeSamples(frame [512]byte) ([]ReceiverSample, error) {
+func (state *Protocol1Radio) decodeSamples(frame [512]byte) ([][]ReceiverSample, error) {
 	buf := bytes.NewBuffer(frame[:])
 	var packet ep6Data
 
@@ -460,7 +472,38 @@ func (state *Protocol1Radio) decodeSamples(frame [512]byte) ([]ReceiverSample, e
 		state.Current = uint16(rdata & 0xffff)
 		state.ReversePower = uint16((rdata >> 16) & 0xffff)
 	}
-	return packet.Samples[:], nil
+	samples := make([][]ReceiverSample, state.GetRecieverCount())
+	samplesPerMessage := (512 - 8) / (int(state.GetRecieverCount())*6 + 2)
+	for i := range samples {
+		samples[i] = make([]ReceiverSample, samplesPerMessage)
+	}
+
+	n := 0
+	for i := 0; i < samplesPerMessage; i++ {
+		for j := 0; j < state.GetRecieverCount(); j++ {
+			samples[j][i].Q2 = packet.SampleData[n]
+			n++
+			samples[j][i].Q1 = packet.SampleData[n]
+			n++
+			samples[j][i].Q0 = packet.SampleData[n]
+			n++
+			samples[j][i].I2 = packet.SampleData[n]
+			n++
+			samples[j][i].I1 = packet.SampleData[n]
+			n++
+			samples[j][i].I0 = packet.SampleData[n]
+			n++
+		}
+		m1 := packet.SampleData[n]
+		n++
+		m0 := packet.SampleData[n]
+		n++
+		for j := 0; j < state.GetRecieverCount(); j++ {
+			samples[j][i].M1 = m1
+			samples[j][i].M0 = m0
+		}
+	}
+	return samples, nil
 }
 
 func assemble(hi, mid, lo byte) uint32 {
