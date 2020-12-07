@@ -23,13 +23,12 @@ import (
 // Receiver is a receiver on a Protocol1Radio
 type Receiver struct {
 	radio      *Radio
-	number     byte
 	sampleFunc func([]hpsdr.ReceiveSample)
 }
 
 // SetFrequency sets the receiver frequency
 func (r *Receiver) SetFrequency(frequency uint) {
-	r.radio.rxFrequency[r.number] = uint32(frequency)
+	r.radio.rxFrequency[r.radio.receiverIndex(r)] = uint32(frequency)
 }
 
 // Close closes the receiver
@@ -38,13 +37,7 @@ func (r *Receiver) Close() error {
 		// Already closed!
 		return errors.New("receiver already closed")
 	}
-	r.radio.receiverMutex.Lock()
-	defer r.radio.receiverMutex.Unlock()
-	delete(r.radio.receivers, r)
-	if r.number > 0 {
-		// Always keep one receiver
-		r.radio.receiverCount--
-	}
+	r.radio.deleteReceiver(r)
 	r.sampleFunc = nil
 	return nil
 }

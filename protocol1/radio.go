@@ -63,7 +63,7 @@ type Radio struct {
 	// 0x00	[10]	VNA fixed RX Gain (0=-6dB, 1=+6dB)
 	vnaGain bool // false=-6db, true=+6db
 	// 0x00	[6:3]	Number of Receivers (0000=1 to max 1011=12)
-	receiverCount byte // 0b0000=1 to max 0b1011=12 - Note that this is number of receivers minus one
+	// receiverCount byte // 0b0000=1 to max 0b1011=12 - Note that this is number of receivers minus one
 	// 0x00	[2]	Duplex (0=off, 1=on)
 	duplex bool // false=off, true=on
 	// 0x01	[31:0]	TX1 NCO Frequency in Hz
@@ -198,8 +198,8 @@ type Radio struct {
 
 	nextEP2Address byte // Next EP2 address to send to. Value betwwen 0 and 64
 
-	receiverMutex sync.RWMutex       // Used when changing number of receivers, i.e. touching receivers or receiverCount
-	receivers     map[*Receiver]bool // active receivers
+	receiverMutex sync.RWMutex // Used when modifying or reading receivers
+	receivers     []*Receiver  // active receivers
 }
 
 // NewRadio creates a Protocol1Radio with reasonable defaults
@@ -207,7 +207,7 @@ func NewRadio(addr *net.UDPAddr) *Radio {
 	ret := Radio{
 		sendIQ:        true,
 		deviceAddress: addr,
-		receivers:     map[*Receiver]bool{},
+		receivers:     []*Receiver{},
 	}
 	return &ret
 }
@@ -240,17 +240,6 @@ func (state *Radio) SetTXFrequency(frequency uint) {
 	log.Printf("[DEBUG] SetTXFrequency: %d", frequency)
 	state.txFrequency = uint32(frequency)
 }
-
-// GetReceiverCount gets the number of receivers
-// func (state *Radio) GetReceiverCount() int {
-// 	return int(state.receiverCount + 1)
-// }
-
-// setReceiverCount sets the number of receivers
-// func (state *Radio) setReceiverCount(receiverCount byte) {
-// 	log.Printf("[DEBUG] SetReceiverCount: %d", receiverCount)
-// 	state.receiverCount = receiverCount - 1
-// }
 
 // SetLNAGain sets the LNA gain. Valid values are between 0 (-12dB) and 60 (48dB)
 func (state *Radio) SetLNAGain(gain uint) {
@@ -387,8 +376,8 @@ func (state *Radio) receiveSamples() {
 			log.Printf("ReceiveSamples: error decoding Frame1 samples: %v", err)
 		}
 		state.receiverMutex.RLock()
-		for r := range state.receivers {
-			r.sampleFunc(s[r.number])
+		for n, r := range state.receivers {
+			r.sampleFunc(s[n])
 		}
 		state.receiverMutex.RUnlock()
 		s, err = state.decodeSamples(mm.Frame2)
@@ -396,8 +385,8 @@ func (state *Radio) receiveSamples() {
 			log.Printf("ReceiveSamples: error decoding Frame2 samples: %v", err)
 		}
 		state.receiverMutex.RLock()
-		for r := range state.receivers {
-			r.sampleFunc(s[r.number])
+		for n, r := range state.receivers {
+			r.sampleFunc(s[n])
 		}
 		state.receiverMutex.RUnlock()
 		// log.Printf("[DEBUG] ReceiveSamples: %#v", *mm)
@@ -453,15 +442,15 @@ func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 	}
 	state.receiverMutex.RLock()
 	defer state.receiverMutex.RUnlock()
-	samples := make([][]hpsdr.ReceiveSample, (state.receiverCount + 1))
-	samplesPerMessage := (512 - 8) / (int((state.receiverCount+1))*6 + 2)
+	samples := make([][]hpsdr.ReceiveSample, len(state.receivers))
+	samplesPerMessage := (512 - 8) / (len(state.receivers)*6 + 2)
 	for i := range samples {
 		samples[i] = make([]hpsdr.ReceiveSample, samplesPerMessage)
 	}
 
 	n := 0
 	for i := 0; i < samplesPerMessage; i++ {
-		for j := 0; j < int(state.receiverCount+1); j++ {
+		for j := 0; j < len(state.receivers); j++ {
 			samples[j][i].I2 = packet.SampleData[n]
 			n++
 			samples[j][i].I1 = packet.SampleData[n]
@@ -479,7 +468,7 @@ func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 		n++
 		m0 := packet.SampleData[n]
 		n++
-		for j := 0; j < int(state.receiverCount+1); j++ {
+		for j := 0; j < len(state.receivers); j++ {
 			samples[j][i].M1 = m1
 			samples[j][i].M0 = m0
 		}
@@ -550,17 +539,37 @@ func (state *Radio) writeMessage(msg MetisMessage) error {
 // 	return nil
 // }
 
+// receiverIndex returns the ordinal index of the passed receiver, or -1 if the receiver is not valid
+func (state *Radio) receiverIndex(rec *Receiver) int {
+	state.receiverMutex.RLock()
+	defer state.receiverMutex.RUnlock()
+	for n, r := range state.receivers {
+		if r == rec {
+			return n
+		}
+	}
+	return -1
+}
+
 // AddReceiver adds a new Receiver to the Radio and returns it
 func (state *Radio) AddReceiver(sampleFunc func([]hpsdr.ReceiveSample)) hpsdr.Receiver {
 	state.receiverMutex.Lock()
 	defer state.receiverMutex.Unlock()
-	if len(state.receivers) != 0 {
-		// The first receiver always exists, so no need to increment to create it
-		state.receiverCount++
-	}
-	r := &Receiver{state, state.receiverCount, sampleFunc}
-	state.receivers[r] = true
+	r := &Receiver{state, sampleFunc}
+	state.receivers = append(state.receivers, r)
 	return r
+}
+
+func (state *Radio) deleteReceiver(rec *Receiver) {
+	state.receiverMutex.Lock()
+	defer state.receiverMutex.Unlock()
+	for n, r := range state.receivers {
+		if r == rec {
+			state.receivers = append(state.receivers[:n], state.receivers[n+1:]...)
+			return
+		}
+	}
+	return
 }
 
 type ep2Data struct {
@@ -596,7 +605,11 @@ func (state *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSampl
 		}
 		state.receiverMutex.RLock()
 		defer state.receiverMutex.RUnlock()
-		tdata |= uint32(state.receiverCount) << 3
+		receiverCount := 0
+		if len(state.receivers) > 0 {
+			receiverCount = len(state.receivers) - 1
+		}
+		tdata |= uint32(receiverCount) << 3
 		if state.duplex {
 			tdata |= 1 << 2
 		}

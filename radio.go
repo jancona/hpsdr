@@ -19,8 +19,6 @@ import "math"
 // Radio represents an HPSDR radio
 type Radio interface {
 	Close()
-	// GetReceiverCount() int
-	// ReceiveSamples(outFunc func([]ReceiveSample))
 	SendSamples([]TransmitSample) error
 	SetOCOut(uint8)
 	SetLNAGain(gain uint)
