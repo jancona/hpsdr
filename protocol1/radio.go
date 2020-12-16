@@ -15,14 +15,12 @@
 package protocol1
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/jancona/hpsdr"
 )
@@ -41,11 +39,11 @@ const (
 	metisStop           = 0
 )
 
-// Radio is the current desired state of the radio
+// Radio is the current desired radio of the radio
 type Radio struct {
-	running       bool
-	deviceAddress *net.UDPAddr
-	conn          *net.UDPConn
+	running bool
+	device  *hpsdr.Device
+	conn    *net.UDPConn
 	// protocol state
 	sendIQ        bool
 	sendBandscope bool
@@ -192,38 +190,43 @@ type Radio struct {
 	// 0x02	[15:0]	Current
 	Current uint16
 
-	// Message state
+	// Message radio
 	sentSeqNum         uint32
 	lastReceivedSeqNum uint32
 
 	nextEP2Address byte // Next EP2 address to send to. Value betwwen 0 and 64
 
-	receiverMutex sync.RWMutex // Used when modifying or reading receivers
-	receivers     []*Receiver  // active receivers
+	receiverMutex sync.Mutex  // Used when modifying or reading receivers
+	receivers     []*Receiver // active receivers
 }
 
 // NewRadio creates a Protocol1Radio with reasonable defaults
-func NewRadio(addr *net.UDPAddr) *Radio {
+func NewRadio(device *hpsdr.Device) *Radio {
 	ret := Radio{
-		sendIQ:        true,
-		deviceAddress: addr,
-		receivers:     []*Receiver{},
+		sendIQ:    true,
+		device:    device,
+		receivers: []*Receiver{},
 	}
 	return &ret
 }
 
+// Device returns the device information
+func (radio *Radio) Device() hpsdr.Device {
+	return *radio.device
+}
+
 // SetSampleRate sets the sample rate in Hz. Valid values are 48000, 96000, 192000 or 384000
-func (state *Radio) SetSampleRate(speed uint) error {
+func (radio *Radio) SetSampleRate(speed uint) error {
 	log.Printf("[DEBUG] SetSampleRate: %d", speed)
 	switch speed {
 	case 48000:
-		state.speed = 0b00
+		radio.speed = 0b00
 	case 96000:
-		state.speed = 0b01
+		radio.speed = 0b01
 	case 192000:
-		state.speed = 0b10
+		radio.speed = 0b10
 	case 384000:
-		state.speed = 0b11
+		radio.speed = 0b11
 	default:
 		return fmt.Errorf("Valid speed values are (48000, 96000, 192000, 384000), got %d", speed)
 	}
@@ -231,125 +234,122 @@ func (state *Radio) SetSampleRate(speed uint) error {
 }
 
 // SetOCOut set the open collector output bits
-func (state *Radio) SetOCOut(ocOut uint8) {
-	state.ocOut = ocOut
+func (radio *Radio) SetOCOut(ocOut uint8) {
+	radio.ocOut = ocOut
 }
 
 // SetTXFrequency sets the TX NCO frequency
-func (state *Radio) SetTXFrequency(frequency uint) {
+func (radio *Radio) SetTXFrequency(frequency uint) {
 	log.Printf("[DEBUG] SetTXFrequency: %d", frequency)
-	state.txFrequency = uint32(frequency)
+	radio.txFrequency = uint32(frequency)
 }
 
 // SetLNAGain sets the LNA gain. Valid values are between 0 (-12dB) and 60 (48dB)
-func (state *Radio) SetLNAGain(gain uint) {
-	state.hl2LNAMode = true
+func (radio *Radio) SetLNAGain(gain uint) {
+	radio.hl2LNAMode = true
 	if gain > 60 {
 		gain = 60
 	}
-	state.receiveLNAGain = byte(gain)
+	radio.receiveLNAGain = byte(gain)
 }
 
 // TransmitSamplesPerMessage is the number of transmit samples per message
-func (state *Radio) TransmitSamplesPerMessage() uint {
+func (radio *Radio) TransmitSamplesPerMessage() uint {
 	return TransmitSamplesPerMessage
 }
 
 // Start starts the radio
-func (state *Radio) Start() error {
-	if !state.sendIQ && !state.sendBandscope {
+func (radio *Radio) Start() error {
+	if !radio.sendIQ && !radio.sendBandscope {
 		return errors.New("Neither IQ nor bandscope are enabled")
 	}
 	var err error
-	if state.conn == nil {
+	if radio.conn == nil {
 		// Maybe we should bind to the discovered interface
-		state.conn, err = net.ListenUDP("udp", nil)
+		radio.conn, err = net.ListenUDP("udp", nil)
 		if err != nil {
 			return fmt.Errorf("Error opening UDP connection: %w", err)
 		}
 	}
-	err = state.sendMetisCommand(metisStop)
+	err = radio.sendMetisCommand(metisStop)
 	if err != nil {
 		return fmt.Errorf("Error sending stop command %w", err)
 	}
 	var frame1, frame2 [512]byte
 	// initialize
 	s := make([]hpsdr.TransmitSample, TransmitSamplesPerMessage)
-	frame1, err = state.buildEP2Frame(0x0, s[:samplesPerFrame])
+	frame1, err = radio.buildEP2Frame(0x0, s[:samplesPerFrame])
 	if err != nil {
 		return err
 	}
-	frame2, err = state.buildEP2Frame(0x1, s[samplesPerFrame:])
+	frame2, err = radio.buildEP2Frame(0x1, s[samplesPerFrame:])
 	if err != nil {
 		return err
 	}
-	msg := state.newMetisMessage(EP2, frame1, frame2)
-	err = state.writeMessage(msg)
+	msg := radio.newMetisMessage(EP2, frame1, frame2)
+	err = radio.writeMessage(msg)
 	if err != nil {
 		return err
 	}
-	frame1, err = state.buildEP2Frame(0x0, s[:samplesPerFrame])
+	frame1, err = radio.buildEP2Frame(0x0, s[:samplesPerFrame])
 	if err != nil {
 		return err
 	}
-	frame2, err = state.buildEP2Frame(0x2, s[samplesPerFrame:])
+	frame2, err = radio.buildEP2Frame(0x2, s[samplesPerFrame:])
 	if err != nil {
 		return err
 	}
-	msg = state.newMetisMessage(EP2, frame1, frame2)
-	err = state.writeMessage(msg)
+	msg = radio.newMetisMessage(EP2, frame1, frame2)
+	err = radio.writeMessage(msg)
 	if err != nil {
 		return err
 	}
 
 	var cmd byte
-	if state.sendIQ {
+	if radio.sendIQ {
 		cmd |= metisStartIQ
 	}
-	if state.sendBandscope {
+	if radio.sendBandscope {
 		cmd |= metisStartBandscope
 	}
-	err = state.sendMetisCommand(cmd)
+	err = radio.sendMetisCommand(cmd)
 	if err != nil {
 		return fmt.Errorf("Error sending start command %w", err)
 	}
-	go state.receiveSamples()
-	state.running = true
+	go radio.receiveSamples()
+	radio.running = true
 	return nil
 }
 
 // Stop stops the radio
-func (state *Radio) Stop() error {
-	err := state.sendMetisCommand(metisStop)
+func (radio *Radio) Stop() error {
+	err := radio.sendMetisCommand(metisStop)
 	if err != nil {
 		return fmt.Errorf("Error sending stop command %w", err)
 	}
-	state.running = false
+	radio.running = false
 	return nil
 }
 
 // Close the radio connection
-func (state *Radio) Close() {
-	state.Stop()
-	state.conn.Close()
+func (radio *Radio) Close() {
+	radio.Stop()
+	radio.conn.Close()
 }
 
-// ReceiveSamples receives data from the radio
-func (state *Radio) receiveSamples() {
+// receiveSamples receives data from the radio
+func (radio *Radio) receiveSamples() {
 	for {
-		// log.Printf("[DEBUG] ReceiveSamples()")
+		// log.Printf("[DEBUG] receiveSamples()")
 		// Receiving a message
 		buffer := make([]byte, 2048)
-		// log.Printf("[DEBUG] ReceiveSamples: local address %v, remote address %v", r.conn.LocalAddr(), r.conn.RemoteAddr())
-		state.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		l, _, err := state.conn.ReadFromUDP(buffer)
+		// log.Printf("[DEBUG] receiveSamples: local address %v, remote address %v", r.conn.LocalAddr(), r.conn.RemoteAddr())
+		// radio.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		l, _, err := radio.conn.ReadFromUDP(buffer)
 		if err != nil {
 			if neterr, ok := err.(net.Error); ok {
-				if neterr.Timeout() {
-					log.Print("[DEBUG] ReceiveSamples: timeout")
-				}
 				if operr, ok := neterr.(*net.OpError); ok {
-					msg := fmt.Sprintf("ReceiveSamples: Error(): %s, Temporary(): %t, Timeout(): %t, Op: %s, Net: %s, Err: %#v",
+					msg := fmt.Sprintf("receiveSamples: Error(): %s, Temporary(): %t, Timeout(): %t, Op: %s, Net: %s, Err: %#v",
 						operr.Error(),
 						operr.Temporary(),
 						operr.Timeout(),
@@ -359,37 +359,39 @@ func (state *Radio) receiveSamples() {
 					)
 					log.Print(msg)
 				} else {
-					log.Printf("ReceiveSamples: neterr: %#v", neterr)
+					log.Printf("receiveSamples: neterr: %#v", neterr)
 				}
 			} else {
-				log.Printf("ReceiveSamples: Error reading from receiver: %#v", err)
+				log.Printf("receiveSamples: Error reading from receiver: %#v", err)
 			}
 			return
 		}
-		buf := bytes.NewBuffer(buffer[:l])
-		mm, err := MetisMessageFromBuffer(buf)
+		mm := MetisMessage{}
+		mm.EF = buffer[0]
+		mm.FE = buffer[1]
+		mm.ID01 = buffer[2]
+		mm.EndPoint = metisEndpoint(buffer[3])
+		mm.SequenceNumber = binary.BigEndian.Uint32(buffer[4:8])
+		copy(mm.Frame1[:], buffer[8:8+512])
+		copy(mm.Frame2[:], buffer[8+512:l])
+
+		radio.receiverMutex.Lock()
+		s, err := radio.decodeSamples(mm.Frame1)
 		if err != nil {
-			log.Printf("ReceiveSamples: error processing packet: %v", err)
+			log.Printf("receiveSamples: error decoding Frame1 samples: %v", err)
 		}
-		s, err := state.decodeSamples(mm.Frame1)
-		if err != nil {
-			log.Printf("ReceiveSamples: error decoding Frame1 samples: %v", err)
-		}
-		state.receiverMutex.RLock()
-		for n, r := range state.receivers {
+		for n, r := range radio.receivers {
 			r.sampleFunc(s[n])
 		}
-		state.receiverMutex.RUnlock()
-		s, err = state.decodeSamples(mm.Frame2)
+		s, err = radio.decodeSamples(mm.Frame2)
 		if err != nil {
-			log.Printf("ReceiveSamples: error decoding Frame2 samples: %v", err)
+			log.Printf("receiveSamples: error decoding Frame2 samples: %v", err)
 		}
-		state.receiverMutex.RLock()
-		for n, r := range state.receivers {
+		for n, r := range radio.receivers {
 			r.sampleFunc(s[n])
 		}
-		state.receiverMutex.RUnlock()
-		// log.Printf("[DEBUG] ReceiveSamples: %#v", *mm)
+		radio.receiverMutex.Unlock()
+		// log.Printf("[DEBUG] receiveSamples: %#v", *mm)
 	}
 }
 
@@ -404,14 +406,22 @@ type ep6Data struct {
 	// Samples [samplesPerFrame]hpsdr.ReceiverSample
 }
 
-func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, error) {
-	buf := bytes.NewBuffer(frame[:])
+func (radio *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, error) {
 	var packet ep6Data
 
-	err := binary.Read(buf, binary.BigEndian, &packet)
-	if err != nil {
-		return nil, fmt.Errorf("Error decoding received samples: %w", err)
-	}
+	copy(packet.Sync[:], frame[0:3])
+	i := 3
+	packet.C0 = frame[i]
+	i++
+	packet.C1 = frame[i]
+	i++
+	packet.C2 = frame[i]
+	i++
+	packet.C3 = frame[i]
+	i++
+	packet.C4 = frame[i]
+	i++
+	copy(packet.SampleData[:], frame[i:i+samplesPerFrame*8])
 	// sanity check
 	if packet.Sync[0] != 0x7f || packet.Sync[1] != 0x7f || packet.Sync[2] != 0x7f {
 		return nil, fmt.Errorf("Received corrupted EP6 frame. Incorrect Sync bytes: %#v", packet)
@@ -419,7 +429,7 @@ func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 	if (packet.C0 & 0b10000000) != 0 {
 		return nil, fmt.Errorf("Received EP6 frame with ACK set: %#v", packet)
 	}
-	state.PTT = (packet.C0 & 0b1) != 0
+	radio.PTT = (packet.C0 & 0b1) != 0
 	var addr byte
 	addr = (packet.C0 & 0b01111000) >> 3
 	rdata := uint32(packet.C1) << 24
@@ -428,29 +438,30 @@ func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 	rdata |= uint32(packet.C4)
 	switch addr {
 	case 0x00:
-		state.ADCOverload = (rdata & 1 << 24) != 0
-		state.OverflowRecovery = (rdata & 1 << 15) != 0
-		state.FirmwareVersion = byte(rdata & 0xff)
-		// log.Printf("[DEBUG] ADCOverload: %v, OverflowRecovery: %v, FirmwareVersion: %v", state.ADCOverload, state.OverflowRecovery, state.FirmwareVersion)
+		radio.ADCOverload = (rdata & 1 << 24) != 0
+		radio.OverflowRecovery = (rdata & 1 << 15) != 0
+		radio.FirmwareVersion = byte(rdata & 0xff)
+		// log.Printf("[DEBUG] ADCOverload: %v, OverflowRecovery: %v, FirmwareVersion: %v", radio.ADCOverload, radio.OverflowRecovery, radio.FirmwareVersion)
 	case 0x01:
-		state.ForwardPower = uint16(rdata & 0xffff)
-		state.Temperature = uint16((rdata >> 16) & 0xffff)
-		// log.Printf("[DEBUG] ForwardPower: %v, Temperature: %v", state.ForwardPower, state.Temperature)
+		radio.ForwardPower = uint16(rdata & 0xffff)
+		radio.Temperature = uint16((rdata >> 16) & 0xffff)
+		// log.Printf("[DEBUG] ForwardPower: %v, Temperature: %v", radio.ForwardPower, radio.Temperature)
 	case 0x02:
-		state.Current = uint16(rdata & 0xffff)
-		state.ReversePower = uint16((rdata >> 16) & 0xffff)
+		radio.Current = uint16(rdata & 0xffff)
+		radio.ReversePower = uint16((rdata >> 16) & 0xffff)
 	}
-	state.receiverMutex.RLock()
-	defer state.receiverMutex.RUnlock()
-	samples := make([][]hpsdr.ReceiveSample, len(state.receivers))
-	samplesPerMessage := (512 - 8) / (len(state.receivers)*6 + 2)
+	// The mutex is managed in the caller, receiveSamples()
+	// radio.receiverMutex.Lock()
+	// defer radio.receiverMutex.Unlock()
+	samples := make([][]hpsdr.ReceiveSample, len(radio.receivers))
+	samplesPerMessage := (512 - 8) / (len(radio.receivers)*6 + 2)
 	for i := range samples {
 		samples[i] = make([]hpsdr.ReceiveSample, samplesPerMessage)
 	}
 
 	n := 0
 	for i := 0; i < samplesPerMessage; i++ {
-		for j := 0; j < len(state.receivers); j++ {
+		for j := 0; j < len(radio.receivers); j++ {
 			samples[j][i].I2 = packet.SampleData[n]
 			n++
 			samples[j][i].I1 = packet.SampleData[n]
@@ -468,7 +479,7 @@ func (state *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 		n++
 		m0 := packet.SampleData[n]
 		n++
-		for j := 0; j < len(state.receivers); j++ {
+		for j := 0; j < len(radio.receivers); j++ {
 			samples[j][i].M1 = m1
 			samples[j][i].M0 = m0
 		}
@@ -480,8 +491,8 @@ func assemble(hi, mid, lo byte) uint32 {
 	return uint32(lo) | uint32(mid)<<8 | uint32(hi)<<16
 }
 
-// SendSamples send data to the radio and updates its state
-func (state *Radio) SendSamples(samples []hpsdr.TransmitSample) error {
+// SendSamples send data to the radio and updates its radio
+func (radio *Radio) SendSamples(samples []hpsdr.TransmitSample) error {
 	// Eventually we should buffer until we have enough to send a packet.
 	// For now, if we dont have have a multiple of 126 samples, we send what we have and pad with empty ones
 	var frame1, frame2 [512]byte
@@ -493,41 +504,52 @@ func (state *Radio) SendSamples(samples []hpsdr.TransmitSample) error {
 		copy(s, samples)
 	}
 
-	frame1, err = state.buildEP2Frame(state.nextEP2Address, s[:samplesPerFrame])
+	frame1, err = radio.buildEP2Frame(radio.nextEP2Address, s[:samplesPerFrame])
 	if err != nil {
 		return err
 	}
-	if state.nextEP2Address < lastEP2Address {
-		state.nextEP2Address++
+	if radio.nextEP2Address < lastEP2Address {
+		radio.nextEP2Address++
 	} else {
-		state.nextEP2Address = 0
+		radio.nextEP2Address = 0
 	}
 
-	frame2, err = state.buildEP2Frame(state.nextEP2Address, s[samplesPerFrame:])
+	frame2, err = radio.buildEP2Frame(radio.nextEP2Address, s[samplesPerFrame:])
 	if err != nil {
 		return err
 	}
-	if state.nextEP2Address < lastEP2Address {
-		state.nextEP2Address++
+	if radio.nextEP2Address < lastEP2Address {
+		radio.nextEP2Address++
 	} else {
-		state.nextEP2Address = 0
+		radio.nextEP2Address = 0
 	}
-	msg := state.newMetisMessage(EP2, frame1, frame2)
+	msg := radio.newMetisMessage(EP2, frame1, frame2)
 
-	err = state.writeMessage(msg)
+	err = radio.writeMessage(msg)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (state *Radio) writeMessage(msg MetisMessage) error {
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, msg)
-	if err != nil {
-		return err
-	}
-	_, err = state.conn.WriteToUDP(buf.Bytes(), state.deviceAddress)
+func (radio *Radio) writeMessage(msg MetisMessage) error {
+	buf := make([]byte, 1032, 1032)
+	i := 0
+	buf[i] = msg.EF
+	i++
+	buf[i] = msg.FE
+	i++
+	buf[i] = msg.ID01
+	i++
+	buf[i] = byte(msg.EndPoint)
+	i++
+	binary.BigEndian.PutUint32(buf[i:i+4], msg.SequenceNumber)
+	i += 4
+	copy(buf[i:i+512], msg.Frame1[:])
+	i += 512
+	copy(buf[i:i+512], msg.Frame2[:])
+	_, err := radio.conn.WriteToUDP(buf, radio.device.Network.Address)
+	// _, err = radio.conn.WriteToUDP(buf.Bytes(), radio.device.Network.Address)
 	if err != nil {
 		return err
 	}
@@ -535,15 +557,11 @@ func (state *Radio) writeMessage(msg MetisMessage) error {
 	return nil
 }
 
-// func (state *Radio) Receivers() []hpsdr.Receiver {
-// 	return nil
-// }
-
 // receiverIndex returns the ordinal index of the passed receiver, or -1 if the receiver is not valid
-func (state *Radio) receiverIndex(rec *Receiver) int {
-	state.receiverMutex.RLock()
-	defer state.receiverMutex.RUnlock()
-	for n, r := range state.receivers {
+func (radio *Radio) receiverIndex(rec *Receiver) int {
+	radio.receiverMutex.Lock()
+	defer radio.receiverMutex.Unlock()
+	for n, r := range radio.receivers {
 		if r == rec {
 			return n
 		}
@@ -551,24 +569,30 @@ func (state *Radio) receiverIndex(rec *Receiver) int {
 	return -1
 }
 
-// AddReceiver adds a new Receiver to the Radio and returns it
-func (state *Radio) AddReceiver(sampleFunc func([]hpsdr.ReceiveSample)) hpsdr.Receiver {
-	state.receiverMutex.Lock()
-	defer state.receiverMutex.Unlock()
-	r := &Receiver{state, sampleFunc}
-	state.receivers = append(state.receivers, r)
-	return r
+// AddReceiver adds a new Receiver to the Radio and returns it.
+func (radio *Radio) AddReceiver(sampleFunc func([]hpsdr.ReceiveSample)) (hpsdr.Receiver, error) {
+	radio.receiverMutex.Lock()
+	defer radio.receiverMutex.Unlock()
+	if len(radio.receivers) >= radio.device.SupportedReceivers {
+		return nil, errors.New("Maximum number of receivers already in use")
+	}
+	r := &Receiver{radio, sampleFunc}
+	radio.receivers = append(radio.receivers, r)
+	return r, nil
 }
 
-func (state *Radio) deleteReceiver(rec *Receiver) {
-	state.receiverMutex.Lock()
-	defer state.receiverMutex.Unlock()
-	for n, r := range state.receivers {
+func (radio *Radio) deleteReceiver(rec *Receiver) {
+	radio.receiverMutex.Lock()
+	defer radio.receiverMutex.Unlock()
+	log.Printf("[DEBUG] Attempting to delete receiver %#v", *rec)
+	for n, r := range radio.receivers {
 		if r == rec {
-			state.receivers = append(state.receivers[:n], state.receivers[n+1:]...)
+			log.Printf("[DEBUG] Deleting receiver %#v", *rec)
+			radio.receivers = append(radio.receivers[:n], radio.receivers[n+1:]...)
 			return
 		}
 	}
+	log.Printf("[DEBUG] Failed to delete receiver %v (%v) from %#v", *rec, rec, radio.receivers)
 	return
 }
 
@@ -582,7 +606,7 @@ type ep2Data struct {
 	Samples [samplesPerFrame]hpsdr.TransmitSample
 }
 
-func (state *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSample) ([512]byte, error) {
+func (radio *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSample) ([512]byte, error) {
 	arr := [512]byte{}
 	data := ep2Data{
 		Sync: [3]byte{0x7F, 0x7F, 0x7F},
@@ -592,71 +616,71 @@ func (state *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSampl
 	var tdata uint32
 	switch ep2Address {
 	case 0x00:
-		tdata |= uint32(state.speed&0b11) << 24
-		tdata |= uint32(state.ocOut&0b1111111) << 17
-		if state.rxAntenna {
+		tdata |= uint32(radio.speed&0b11) << 24
+		tdata |= uint32(radio.ocOut&0b1111111) << 17
+		if radio.rxAntenna {
 			tdata |= 1 << 13
 		}
-		if state.clockOff {
+		if radio.clockOff {
 			tdata |= 1 << 12
 		}
-		if state.vnaGain {
+		if radio.vnaGain {
 			tdata |= 1 << 10
 		}
-		state.receiverMutex.RLock()
-		defer state.receiverMutex.RUnlock()
+		radio.receiverMutex.Lock()
 		receiverCount := 0
-		if len(state.receivers) > 0 {
-			receiverCount = len(state.receivers) - 1
+		if len(radio.receivers) > 0 {
+			receiverCount = len(radio.receivers) - 1
 		}
+		radio.receiverMutex.Unlock()
 		tdata |= uint32(receiverCount) << 3
-		if state.duplex {
+		if radio.duplex {
 			tdata |= 1 << 2
 		}
 	case 0x01:
-		tdata = state.txFrequency
+		tdata = radio.txFrequency
 	case 0x02:
-		// log.Printf("[DEBUG] Set rx1Frequency to %d", state.rx1Frequency)
-		tdata = state.rxFrequency[0]
+		// log.Printf("[DEBUG] Set rx1Frequency to %d", radio.rx1Frequency)
+		tdata = radio.rxFrequency[0]
 	case 0x03:
-		tdata = state.rxFrequency[1]
+		tdata = radio.rxFrequency[1]
 	case 0x04:
-		tdata = state.rxFrequency[2]
+		tdata = radio.rxFrequency[2]
 	case 0x05:
-		tdata = state.rxFrequency[3]
+		tdata = radio.rxFrequency[3]
 	case 0x06:
-		tdata = state.rxFrequency[4]
+		tdata = radio.rxFrequency[4]
 	case 0x07:
-		tdata = state.rxFrequency[5]
+		tdata = radio.rxFrequency[5]
 	case 0x08:
-		tdata = state.rxFrequency[6]
+		tdata = radio.rxFrequency[6]
 	case 0x09:
-		tdata |= uint32(state.txDrive) >> 24
-		if state.vnaMode {
+		tdata |= uint32(radio.txDrive) >> 24
+		if radio.vnaMode {
 			tdata |= 1 << 23
 		}
-		if state.alexMode {
+		if radio.alexMode {
 			tdata |= 1 << 22
 		}
-		if state.tune {
+		if radio.tune {
 			tdata |= 1 << 20
 		}
-		if state.paOn {
+		if radio.paOn {
 			tdata |= 1 << 19
 		}
-		tdata |= uint32(state.vnaCount)
+		tdata |= uint32(radio.vnaCount)
 	case 0x0a:
-		if state.pureSignal {
+		if radio.pureSignal {
 			tdata |= 1 << 22
 		}
-		if state.hl2LNAMode {
+		if radio.hl2LNAMode {
 			tdata |= 1 << 6
-			tdata |= uint32(state.receiveLNAGain)
+			tdata |= uint32(radio.receiveLNAGain)
 		} else {
 			// not implemented
 		}
 	case 0x0e:
-		if state.hwTXLNA {
+		if radio.hwTXLNA {
 			tdata |= 1 << 15
 		}
 		// Other TX LNA gain not implemented
@@ -665,26 +689,26 @@ func (state *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSampl
 	case 0x10:
 		// CW hang time not implemented
 	case 0x12:
-		tdata = state.rxFrequency[7]
+		tdata = radio.rxFrequency[7]
 	case 0x13:
-		tdata = state.rxFrequency[8]
+		tdata = radio.rxFrequency[8]
 	case 0x14:
-		tdata = state.rxFrequency[9]
+		tdata = radio.rxFrequency[9]
 	case 0x15:
-		tdata = state.rxFrequency[10]
+		tdata = radio.rxFrequency[10]
 	case 0x16:
-		tdata = state.rxFrequency[11]
+		tdata = radio.rxFrequency[11]
 	case 0x17:
-		tdata |= uint32(state.pttHangTime) << 8
-		tdata |= uint32(state.txBufferLatency)
+		tdata |= uint32(radio.pttHangTime) << 8
+		tdata |= uint32(radio.txBufferLatency)
 	case 0x2b:
-		tdata |= uint32(state.preDistortionSubIndex) << 24
-		tdata |= uint32(state.preDistortion) << 16
+		tdata |= uint32(radio.preDistortionSubIndex) << 24
+		tdata |= uint32(radio.preDistortion) << 16
 		// Rest of commands not implemented
 	}
 
 	data.C0 = 0
-	if state.mox {
+	if radio.mox {
 		data.C0 |= 0x01
 	}
 	data.C0 |= ep2Address << 1
@@ -694,41 +718,42 @@ func (state *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSampl
 	data.C4 = byte(tdata)
 	// log.Printf("[DEBUG] Sending address: %02x, %d (decimal)\n\t\t\tdata.C0=%02x, data.C1=%02x, data.C2=%02x, data.C3=%02x, data.C4=%02x", ep2Address, tdata, data.C0, data.C1, data.C2, data.C3, data.C4)
 
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, data)
-	if err != nil {
-		return arr, err
+	i := 0
+	copy(arr[i:3], data.Sync[:])
+	i += 3
+	arr[i] = data.C0
+	i++
+	arr[i] = data.C1
+	i++
+	arr[i] = data.C2
+	i++
+	arr[i] = data.C3
+	i++
+	arr[i] = data.C4
+	i++
+	for _, s := range data.Samples {
+		binary.BigEndian.PutUint16(arr[i:i+2], s.Left)
+		i += 2
+		binary.BigEndian.PutUint16(arr[i:i+2], s.Right)
+		i += 2
+		binary.BigEndian.PutUint16(arr[i:i+2], s.I)
+		i += 2
+		binary.BigEndian.PutUint16(arr[i:i+2], s.Q)
+		i += 2
 	}
-	cnt := copy(arr[:], buf.Bytes())
-	if cnt != 512 {
-		return arr, fmt.Errorf("Built short EP2 frame (should be 512, was %d)", cnt)
+	if i != 512 {
+		return arr, fmt.Errorf("Built incorrect length EP2 frame (should be 512, was %d)", i)
 	}
 	return arr, nil
 }
 
-type metisStartStop struct {
-	EF      byte
-	FE      byte
-	ID04    byte
-	Command byte
-	Filler  [60]byte
-}
-
-func (state *Radio) sendMetisCommand(command byte) error {
-	msg := metisStartStop{
-		EF:      0xEF,
-		FE:      0xFE,
-		ID04:    0x04,
-		Command: command,
-		Filler:  [60]byte{},
-	}
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, msg)
-	if err != nil {
-		return err
-	}
-	// cnt, err := state.conn.WriteToUDP(buf.Bytes(), state.deviceAddress)
-	_, err = state.conn.WriteToUDP(buf.Bytes(), state.deviceAddress)
+func (radio *Radio) sendMetisCommand(command byte) error {
+	buf := make([]byte, 64, 64)
+	buf[0] = 0xEF
+	buf[1] = 0xFE
+	buf[2] = 0x04
+	buf[3] = command
+	_, err := radio.conn.WriteToUDP(buf, radio.device.Network.Address)
 	if err != nil {
 		return err
 	}
@@ -757,42 +782,16 @@ type MetisMessage struct {
 }
 
 // newMetisMessage builds a new Metis message for sending
-func (state *Radio) newMetisMessage(endPoint metisEndpoint, frame1, frame2 [512]byte) MetisMessage {
+func (radio *Radio) newMetisMessage(endPoint metisEndpoint, frame1, frame2 [512]byte) MetisMessage {
 	ret := MetisMessage{
 		EF:             0xEF,
 		FE:             0xFE,
 		ID01:           0x01,
 		EndPoint:       endPoint,
-		SequenceNumber: state.sentSeqNum,
+		SequenceNumber: radio.sentSeqNum,
 		Frame1:         frame1,
 		Frame2:         frame2,
 	}
-	state.sentSeqNum++
+	radio.sentSeqNum++
 	return ret
-}
-
-// MetisMessageFromBuffer deserializes a MetisMessage
-func MetisMessageFromBuffer(buf *bytes.Buffer) (*MetisMessage, error) {
-	mm := MetisMessage{}
-	err := binary.Read(buf, binary.BigEndian, &mm)
-	if err != nil {
-		return nil, fmt.Errorf("Error deserializing MetisMessage: %w", err)
-	}
-	// do some sanity checks
-	if mm.EF != 0xEF ||
-		mm.FE != 0xFe ||
-		mm.ID01 != 0x01 {
-		return nil, fmt.Errorf("Received corrupted message: %#v", mm)
-	}
-	// log.Printf("[DEBUG] Received MetisMessage: Endpoint %02x, SequenceNumber %d", mm.EndPoint, mm.SequenceNumber)
-
-	return &mm, nil
-}
-
-// Bytes serializes a MetisMessage as a byte slice
-func (m *MetisMessage) Bytes() ([]byte, error) {
-	// log.Printf("[DEBUG] MetisMessage.Bytes(): %#v", *m)
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, m)
-	return buf.Bytes(), err
 }

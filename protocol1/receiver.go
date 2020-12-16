@@ -27,17 +27,32 @@ type Receiver struct {
 }
 
 // SetFrequency sets the receiver frequency
-func (r *Receiver) SetFrequency(frequency uint) {
-	r.radio.rxFrequency[r.radio.receiverIndex(r)] = uint32(frequency)
+func (rec *Receiver) SetFrequency(frequency uint) {
+	index := rec.radio.receiverIndex(rec)
+	rec.radio.rxFrequency[index] = uint32(frequency)
+	if index == 0 {
+		rec.radio.SetTXFrequency(frequency)
+	}
+}
+
+// GetFrequency returns the receiver center frequency
+func (rec *Receiver) GetFrequency() uint {
+	index := rec.radio.receiverIndex(rec)
+	return uint(rec.radio.rxFrequency[index])
 }
 
 // Close closes the receiver
-func (r *Receiver) Close() error {
-	if r.sampleFunc == nil {
+func (rec *Receiver) Close() error {
+	rec.radio.deleteReceiver(rec)
+	if rec.IsClosed() {
 		// Already closed!
 		return errors.New("receiver already closed")
 	}
-	r.radio.deleteReceiver(r)
-	r.sampleFunc = nil
+	rec.sampleFunc = nil
 	return nil
+}
+
+// IsClosed returns true if the receiver has been closed
+func (rec *Receiver) IsClosed() bool {
+	return rec.sampleFunc == nil
 }

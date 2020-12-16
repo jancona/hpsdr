@@ -19,6 +19,8 @@ import "math"
 // Radio represents an HPSDR radio
 type Radio interface {
 	Close()
+	Device() Device
+	// Receivers() []Receiver
 	SendSamples([]TransmitSample) error
 	SetOCOut(uint8)
 	SetLNAGain(gain uint)
@@ -28,15 +30,19 @@ type Radio interface {
 	Stop() error
 	TransmitSamplesPerMessage() uint
 	// AddReceiver adds a new Receiver to the Radio and returns it
-	AddReceiver(func([]ReceiveSample)) Receiver
+	AddReceiver(func([]ReceiveSample)) (Receiver, error)
 }
 
 // Receiver represents an HPSDR receiver
 type Receiver interface {
-	// SetFrequency sets the receiver frequency
+	// SetFrequency sets the receiver center frequency
 	SetFrequency(frequency uint)
+	// GetFrequency returns the receiver center frequency
+	GetFrequency() uint
 	// Close closes the receiver
 	Close() error
+	// IsClosed returns true if the receiver has been closed
+	IsClosed() bool
 }
 
 // ReceiveSample represents a single EP6 IQ sample from the radio
@@ -67,8 +73,8 @@ func (rs ReceiveSample) QFloat() float32 {
 
 // TransmitSample represents a single EP2 transmit sample sent to the radio
 type TransmitSample struct {
-	Left  uint32
-	Right uint32
-	I     uint32
-	Q     uint32
+	Left  uint16
+	Right uint16
+	I     uint16
+	Q     uint16
 }

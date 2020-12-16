@@ -39,15 +39,16 @@ const (
 	oldDeviceOrion2     = 10
 )
 
+// Device identifiers
 const (
-	deviceUnknown = -1
-	deviceMetis   = iota
-	deviceHermes
-	deviceHermes2
-	deviceAngelia
-	deviceOrion
-	deviceOrion2
-	deviceHermesLite
+	DeviceUnknown = -1
+	DeviceMetis   = iota
+	DeviceHermes
+	DeviceAngelia
+	DeviceOrion
+	DeviceOrion2
+	DeviceHermesLite
+	DeviceHermesLite2
 )
 
 // Device is a discovered network SDR
@@ -60,19 +61,32 @@ type Device struct {
 	SupportedReceivers int
 	ADCs               int
 	Network            struct {
-		MacAddress       net.HardwareAddr
-		Address          *net.UDPAddr
-		InterfaceAddress *net.IPNet
-		InterfaceName    string
+		MacAddress net.HardwareAddr
+		Address    *net.UDPAddr
+		// InterfaceAddress *net.IPNet
+		// InterfaceName    string
 	}
 }
 
+// DiscoverDevice finds an SDR devices at a particular address
+func DiscoverDevice(ip string) (*Device, error) {
+	devices, err := discoverProtocol1Address(protocol1PortSuffix, ip+protocol1PortSuffix)
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return nil, nil
+	}
+	// It shouldn't be possible for a single IP to return more than one device
+	return devices[0], nil
+}
+
 // DiscoverDevices finds SDR devices on the network
-func DiscoverDevices() ([]Device, error) {
-	devices := make([]Device, 0)
+func DiscoverDevices() ([]*Device, error) {
+	devices := make([]*Device, 0)
 	ifl, err := net.Interfaces()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get network interfaces: %w", err)
+		return devices, fmt.Errorf("Unable to get network interfaces: %w", err)
 	}
 	for _, ifa := range ifl {
 		addrs, err := ifa.Addrs()
@@ -91,7 +105,7 @@ func DiscoverDevices() ([]Device, error) {
 	return devices, nil
 }
 
-func discoverProtocol1(ifa net.Interface, addrs []net.Addr, devices []Device) ([]Device, error) {
+func discoverProtocol1(ifa net.Interface, addrs []net.Addr, devices []*Device) ([]*Device, error) {
 	log.Printf("[DEBUG] discoverProtocol1: looking for HPSDR devices on %s\n", ifa.Name)
 	for _, a := range addrs {
 		ip, ipn, err := net.ParseCIDR(a.String())
@@ -99,53 +113,59 @@ func discoverProtocol1(ifa net.Interface, addrs []net.Addr, devices []Device) ([
 			return devices, fmt.Errorf("Unable to parse CIDR for address %v: %w", a, err)
 		}
 		log.Printf("[DEBUG] discoverProtocol1: ip: %v, ipn: %v, ipn.Mask: %v\n", ip, ipn, ipn.Mask)
-		var a string
+		var ad string
 		ip = ip.To4()
 		if ip != nil {
-			a = ip.String() + protocol1PortSuffix
-			// } else if ip.To16() != nil {
-			// 	a = "[" + ip.String() + "]" + protocol1PortSuffix
-			// }
-			addr, err := net.ResolveUDPAddr("udp", a)
+			ad = ip.String() + protocol1PortSuffix
+			d, err := discoverProtocol1Address(ad, "255.255.255.255"+protocol1PortSuffix)
 			if err != nil {
-				return devices, fmt.Errorf("Unable to resolve UDP address for address %v: %w", a, err)
-			}
-			conn, err := net.ListenUDP("udp", addr)
-			if err != nil {
-				log.Println(err)
 				continue
 			}
-			defer conn.Close()
-			log.Print("[DEBUG] discoverProtocol1: Got connection", conn)
-			found := make(chan Device)
-			go discoverReceive(conn, found, ip, ipn, ifa.Name)
-			// send discovery packet
-			frame := makeFrame(0xEF, 0xFE, 0x02)
-			// According to
-			// https://github.com/TAPR/OpenHPSDR-Firmware/blob/master/Protocol%201/Documentation/Metis-%20How%20it%20works_V1.33.pdf
-			// we should just use 255.255.255.255
-			// Other software varies in practice, and Quisk does both.
-			// Either seems to work for the PiSDR and HL2.
-			// bc, err := lastAddr(ipn)
-			// if err != nil {
-			// 	return devices, fmt.Errorf("Unable to determine broadcast address for network %v: %w", ipn, err)
-			// }
-			// bca, err := net.ResolveUDPAddr("udp", bc.String()+protocol1PortSuffix)
-			bca, err := net.ResolveUDPAddr("udp", "255.255.255.255"+protocol1PortSuffix)
-			if err != nil {
-				log.Printf("[DEBUG] discoverProtocol1: Unable to resolve UDP address: %v", err)
-			} else {
-				_, err = conn.WriteToUDP(frame, bca)
-				if err != nil {
-					log.Printf("[DEBUG] discoverProtocol1: Error sending discovery packet: %v", err)
-				}
-			}
-
-			for device := range found {
-				log.Printf("[DEBUG] found: %v", device)
-				devices = append(devices, device)
-			}
+			devices = append(devices, d...)
 		}
+	}
+	return devices, nil
+}
+
+func discoverProtocol1Address(ifAddr string, bcAddr string) ([]*Device, error) {
+	devices := []*Device{}
+	addr, err := net.ResolveUDPAddr("udp", ifAddr)
+	if err != nil {
+		return devices, fmt.Errorf("Unable to resolve UDP address for address %v: %w", ifAddr, err)
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return devices, err
+	}
+	defer conn.Close()
+	log.Print("[DEBUG] discoverProtocol1Address: Got connection", conn)
+	found := make(chan Device)
+	go discoverReceive(conn, found)
+	// send discovery packet
+	frame := makeFrame(0xEF, 0xFE, 0x02)
+	// According to
+	// https://github.com/TAPR/OpenHPSDR-Firmware/blob/master/Protocol%201/Documentation/Metis-%20How%20it%20works_V1.33.pdf
+	// we should just use 255.255.255.255
+	// Other software varies in practice, and Quisk does both.
+	// Either seems to work for the PiSDR and HL2.
+	// bc, err := lastAddr(ipn)
+	// if err != nil {
+	// 	return devices, fmt.Errorf("Unable to determine broadcast address for network %v: %w", ipn, err)
+	// }
+	// bca, err := net.ResolveUDPAddr("udp", bc.String()+protocol1PortSuffix)
+	bca, err := net.ResolveUDPAddr("udp", bcAddr)
+	if err != nil {
+		log.Printf("[DEBUG] discoverProtocol1: Unable to resolve UDP address: %v", err)
+	} else {
+		_, err = conn.WriteToUDP(frame, bca)
+		if err != nil {
+			log.Printf("[DEBUG] discoverProtocol1: Error sending discovery packet: %v", err)
+		}
+	}
+
+	for device := range found {
+		log.Printf("[DEBUG] found: %v", device)
+		devices = append(devices, &device)
 	}
 	return devices, nil
 }
@@ -163,9 +183,7 @@ func lastAddr(n *net.IPNet) (net.IP, error) { // works when the n is a prefix, o
 func discoverReceive(
 	conn *net.UDPConn,
 	found chan Device,
-	address net.IP,
-	interfaceAddress *net.IPNet,
-	interfaceName string) {
+) {
 	log.Print("[DEBUG] discoverReceive: starting")
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
@@ -187,45 +205,53 @@ func discoverReceive(
 			status := buffer[2]
 			if status == 2 || status == 3 {
 				device.Protocol = protocol1
+				device.SoftwareVersion = buffer[9]
 				switch buffer[10] {
 				case oldDeviceMetis:
-					device.Device = deviceMetis
+					device.Device = DeviceMetis
 					device.Name = "Metis"
 					device.SupportedReceivers = 5
 					device.ADCs = 1
 					break
 				case oldDeviceHermes:
-					device.Device = deviceHermes
+					device.Device = DeviceHermes
 					device.Name = "Hermes"
 					device.SupportedReceivers = 5
 					device.ADCs = 1
 					break
 				case oldDeviceAngelia:
-					device.Device = deviceAngelia
+					device.Device = DeviceAngelia
 					device.Name = "Angelia"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
 					break
 				case oldDeviceOrion:
-					device.Device = deviceOrion
+					device.Device = DeviceOrion
 					device.Name = "Orion"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
 					break
 				case oldDeviceHermesLite:
-					device.Device = deviceHermesLite
-					device.Name = "Hermes Lite"
-					device.SupportedReceivers = 7
-					device.ADCs = 1
+					if device.SoftwareVersion < 42 {
+						device.Device = DeviceHermesLite
+						device.Name = "Hermes Lite"
+						device.SupportedReceivers = 2
+						device.ADCs = 1
+					} else {
+						device.Device = DeviceHermesLite2
+						device.Name = "Hermes Lite 2"
+						device.SupportedReceivers = int(buffer[0x13])
+						device.ADCs = 1
+					}
 					break
 				case oldDeviceOrion2:
-					device.Device = deviceOrion2
+					device.Device = DeviceOrion2
 					device.Name = "Orion 2"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
 					break
 				default:
-					device.Device = deviceUnknown
+					device.Device = DeviceUnknown
 					device.Name = "Unknown"
 					device.SupportedReceivers = 7
 					device.ADCs = 1
@@ -235,8 +261,6 @@ func discoverReceive(
 				device.Network.MacAddress = net.HardwareAddr(buffer[3:9])
 				device.Status = status
 				device.Network.Address = rmAddr
-				device.Network.InterfaceAddress = interfaceAddress
-				device.Network.InterfaceName = interfaceName
 				log.Printf("[DEBUG] discoverReceive: found device:\n%#v", device)
 				found <- device
 			}
