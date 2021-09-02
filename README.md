@@ -6,6 +6,5 @@ This is just a start on a real HPSDR library, but it works for simple receive-on
 Current limitations include:
 * Only the original HPSDR Protocol 1 is supported.
 * It has only been tested with the [Hermes-Lite 2](https://github.com/softerhardware/Hermes-Lite2/wiki). Feel free to create [issues](https://github.com/jancona/hpsdr/issues) with reports of success or failure using other hardware. 
-* Only one receiver is supported.
 * Transmitting is not supported.
 * The API is not yet stable.
