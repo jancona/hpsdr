@@ -228,7 +228,7 @@ func (radio *Radio) SetSampleRate(speed uint) error {
 	case 384000:
 		radio.speed = 0b11
 	default:
-		return fmt.Errorf("Valid speed values are (48000, 96000, 192000, 384000), got %d", speed)
+		return fmt.Errorf("valid speed values are (48000, 96000, 192000, 384000), got %d", speed)
 	}
 	return nil
 }
@@ -261,19 +261,19 @@ func (radio *Radio) TransmitSamplesPerMessage() uint {
 // Start starts the radio
 func (radio *Radio) Start() error {
 	if !radio.sendIQ && !radio.sendBandscope {
-		return errors.New("Neither IQ nor bandscope are enabled")
+		return errors.New("neither IQ nor bandscope are enabled")
 	}
 	var err error
 	if radio.conn == nil {
 		// Maybe we should bind to the discovered interface
 		radio.conn, err = net.ListenUDP("udp", nil)
 		if err != nil {
-			return fmt.Errorf("Error opening UDP connection: %w", err)
+			return fmt.Errorf("error opening UDP connection: %w", err)
 		}
 	}
 	err = radio.sendMetisCommand(metisStop)
 	if err != nil {
-		return fmt.Errorf("Error sending stop command %w", err)
+		return fmt.Errorf("error sending stop command %w", err)
 	}
 	var frame1, frame2 [512]byte
 	// initialize
@@ -314,7 +314,7 @@ func (radio *Radio) Start() error {
 	}
 	err = radio.sendMetisCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("Error sending start command %w", err)
+		return fmt.Errorf("error sending start command %w", err)
 	}
 	go radio.receiveSamples()
 	radio.running = true
@@ -325,7 +325,7 @@ func (radio *Radio) Start() error {
 func (radio *Radio) Stop() error {
 	err := radio.sendMetisCommand(metisStop)
 	if err != nil {
-		return fmt.Errorf("Error sending stop command %w", err)
+		return fmt.Errorf("error sending stop command %w", err)
 	}
 	radio.running = false
 	return nil
@@ -424,14 +424,13 @@ func (radio *Radio) decodeSamples(frame [512]byte) ([][]hpsdr.ReceiveSample, err
 	copy(packet.SampleData[:], frame[i:i+samplesPerFrame*8])
 	// sanity check
 	if packet.Sync[0] != 0x7f || packet.Sync[1] != 0x7f || packet.Sync[2] != 0x7f {
-		return nil, fmt.Errorf("Received corrupted EP6 frame. Incorrect Sync bytes: %#v", packet)
+		return nil, fmt.Errorf("received corrupted EP6 frame. Incorrect Sync bytes: %#v", packet)
 	}
 	if (packet.C0 & 0b10000000) != 0 {
-		return nil, fmt.Errorf("Received EP6 frame with ACK set: %#v", packet)
+		return nil, fmt.Errorf("received EP6 frame with ACK set: %#v", packet)
 	}
 	radio.PTT = (packet.C0 & 0b1) != 0
-	var addr byte
-	addr = (packet.C0 & 0b01111000) >> 3
+	addr := (packet.C0 & 0b01111000) >> 3
 	rdata := uint32(packet.C1) << 24
 	rdata |= uint32(packet.C2) << 16
 	rdata |= uint32(packet.C3) << 8
@@ -533,7 +532,7 @@ func (radio *Radio) SendSamples(samples []hpsdr.TransmitSample) error {
 }
 
 func (radio *Radio) writeMessage(msg MetisMessage) error {
-	buf := make([]byte, 1032, 1032)
+	buf := make([]byte, 1032)
 	i := 0
 	buf[i] = msg.EF
 	i++
@@ -574,7 +573,7 @@ func (radio *Radio) AddReceiver(sampleFunc func([]hpsdr.ReceiveSample)) (hpsdr.R
 	radio.receiverMutex.Lock()
 	defer radio.receiverMutex.Unlock()
 	if len(radio.receivers) >= radio.device.SupportedReceivers {
-		return nil, errors.New("Maximum number of receivers already in use")
+		return nil, errors.New("maximum number of receivers already in use")
 	}
 	r := &Receiver{radio, sampleFunc}
 	radio.receivers = append(radio.receivers, r)
@@ -593,7 +592,6 @@ func (radio *Radio) deleteReceiver(rec *Receiver) {
 		}
 	}
 	log.Printf("[DEBUG] Failed to delete receiver %v (%v) from %#v", *rec, rec, radio.receivers)
-	return
 }
 
 type ep2Data struct {
@@ -742,13 +740,13 @@ func (radio *Radio) buildEP2Frame(ep2Address byte, samples []hpsdr.TransmitSampl
 		i += 2
 	}
 	if i != 512 {
-		return arr, fmt.Errorf("Built incorrect length EP2 frame (should be 512, was %d)", i)
+		return arr, fmt.Errorf("built incorrect length EP2 frame (should be 512, was %d)", i)
 	}
 	return arr, nil
 }
 
 func (radio *Radio) sendMetisCommand(command byte) error {
-	buf := make([]byte, 64, 64)
+	buf := make([]byte, 64)
 	buf[0] = 0xEF
 	buf[1] = 0xFE
 	buf[2] = 0x04

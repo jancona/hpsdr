@@ -86,12 +86,12 @@ func DiscoverDevices() ([]*Device, error) {
 	devices := make([]*Device, 0)
 	ifl, err := net.Interfaces()
 	if err != nil {
-		return devices, fmt.Errorf("Unable to get network interfaces: %w", err)
+		return devices, fmt.Errorf("unable to get network interfaces: %w", err)
 	}
 	for _, ifa := range ifl {
 		addrs, err := ifa.Addrs()
 		if err != nil {
-			return nil, fmt.Errorf("Unable to get network interface addresses: %w", err)
+			return nil, fmt.Errorf("unable to get network interface addresses: %w", err)
 		}
 		if len(addrs) > 0 {
 			if (ifa.Flags & net.FlagUp) == net.FlagUp {
@@ -110,7 +110,7 @@ func discoverProtocol1(ifa net.Interface, addrs []net.Addr, devices []*Device) (
 	for _, a := range addrs {
 		ip, ipn, err := net.ParseCIDR(a.String())
 		if err != nil {
-			return devices, fmt.Errorf("Unable to parse CIDR for address %v: %w", a, err)
+			return devices, fmt.Errorf("unable to parse CIDR for address %v: %w", a, err)
 		}
 		log.Printf("[DEBUG] discoverProtocol1: ip: %v, ipn: %v, ipn.Mask: %v\n", ip, ipn, ipn.Mask)
 		var ad string
@@ -131,7 +131,7 @@ func discoverProtocol1Address(ifAddr string, bcAddr string) ([]*Device, error) {
 	devices := []*Device{}
 	addr, err := net.ResolveUDPAddr("udp", ifAddr)
 	if err != nil {
-		return devices, fmt.Errorf("Unable to resolve UDP address for address %v: %w", ifAddr, err)
+		return devices, fmt.Errorf("unable to resolve UDP address for address %v: %w", ifAddr, err)
 	}
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
@@ -185,7 +185,7 @@ func discoverReceive(
 	found chan Device,
 ) {
 	log.Print("[DEBUG] discoverReceive: starting")
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(1000 * time.Millisecond))
 	for {
 		// Receiving a message
 		buffer := make([]byte, 2048)
@@ -212,25 +212,21 @@ func discoverReceive(
 					device.Name = "Metis"
 					device.SupportedReceivers = 5
 					device.ADCs = 1
-					break
 				case oldDeviceHermes:
 					device.Device = DeviceHermes
 					device.Name = "Hermes"
 					device.SupportedReceivers = 5
 					device.ADCs = 1
-					break
 				case oldDeviceAngelia:
 					device.Device = DeviceAngelia
 					device.Name = "Angelia"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
-					break
 				case oldDeviceOrion:
 					device.Device = DeviceOrion
 					device.Name = "Orion"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
-					break
 				case oldDeviceHermesLite:
 					if device.SoftwareVersion < 42 {
 						device.Device = DeviceHermesLite
@@ -243,19 +239,16 @@ func discoverReceive(
 						device.SupportedReceivers = int(buffer[0x13])
 						device.ADCs = 1
 					}
-					break
 				case oldDeviceOrion2:
 					device.Device = DeviceOrion2
 					device.Name = "Orion 2"
 					device.SupportedReceivers = 7
 					device.ADCs = 2
-					break
 				default:
 					device.Device = DeviceUnknown
 					device.Name = "Unknown"
 					device.SupportedReceivers = 7
 					device.ADCs = 1
-					break
 				}
 				device.SoftwareVersion = buffer[9] & 0xFF
 				device.Network.MacAddress = net.HardwareAddr(buffer[3:9])
