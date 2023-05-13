@@ -379,16 +379,18 @@ func (radio *Radio) receiveSamples() {
 		s, err := radio.decodeSamples(mm.Frame1)
 		if err != nil {
 			log.Printf("receiveSamples: error decoding Frame1 samples: %v", err)
-		}
-		for n, r := range radio.receivers {
-			r.sampleFunc(s[n])
+		} else {
+			for n, r := range radio.receivers {
+				r.sampleFunc(s[n])
+			}
 		}
 		s, err = radio.decodeSamples(mm.Frame2)
 		if err != nil {
 			log.Printf("receiveSamples: error decoding Frame2 samples: %v", err)
-		}
-		for n, r := range radio.receivers {
-			r.sampleFunc(s[n])
+		} else {
+			for n, r := range radio.receivers {
+				r.sampleFunc(s[n])
+			}
 		}
 		radio.receiverMutex.Unlock()
 		// log.Printf("[DEBUG] receiveSamples: %#v", *mm)
