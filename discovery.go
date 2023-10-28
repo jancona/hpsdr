@@ -71,7 +71,7 @@ type Device struct {
 
 // DiscoverDevice finds an SDR devices at a particular address
 func DiscoverDevice(ip string) (*Device, error) {
-	devices, err := discoverProtocol1Address(protocol1PortSuffix, ip+protocol1PortSuffix)
+	devices, err := discoverProtocol1Address(":0", ip+protocol1PortSuffix)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func discoverProtocol1(ifa net.Interface, addrs []net.Addr, devices []*Device) (
 		var ad string
 		ip = ip.To4()
 		if ip != nil {
-			ad = ip.String() + protocol1PortSuffix
+			ad = ip.String() + ":0"
 			d, err := discoverProtocol1Address(ad, "255.255.255.255"+protocol1PortSuffix)
 			if err != nil {
 				continue
@@ -139,7 +139,7 @@ func discoverProtocol1Address(ifAddr string, bcAddr string) ([]*Device, error) {
 		return devices, err
 	}
 	defer conn.Close()
-	log.Print("[DEBUG] discoverProtocol1Address: Got connection", conn)
+	log.Printf("[DEBUG] discoverProtocol1Address: Listening on %v", addr)
 	found := make(chan Device)
 	go discoverReceive(conn, found)
 	// send discovery packet
