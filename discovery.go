@@ -50,6 +50,7 @@ const (
 	DeviceHermesLite
 	DeviceHermesLite2
 	DevicePiSDR
+	DeviceRedPitaya
 )
 
 // Device is a discovered network SDR
@@ -165,7 +166,7 @@ func discoverProtocol1Address(ifAddr string, bcAddr string) ([]*Device, error) {
 	}
 
 	for device := range found {
-		log.Printf("[DEBUG] found: %v", device)
+		log.Printf("[DEBUG] found: %#v", device)
 		devices = append(devices, &device)
 	}
 	return devices, nil
@@ -219,6 +220,15 @@ func discoverReceive(
 					device.Name = "Hermes"
 					device.SupportedReceivers = 5
 					device.ADCs = 1
+					receivers := int(buffer[0x13])
+					if device.SoftwareVersion == 25 && receivers > 0 {
+						// As of late 2023, Pavel Demin's Red Pitaya HPSDR software
+						// (https://pavel-demin.github.io/red-pitaya-notes/) reports itself as device
+						// type Hermes, version 25. It also reports the number of receivers in buffer[0x13].
+						device.Device = DeviceRedPitaya
+						device.Name = "Red Pitaya"
+						device.SupportedReceivers = receivers
+					}
 				case oldDeviceAngelia:
 					device.Device = DeviceAngelia
 					device.Name = "Angelia"
