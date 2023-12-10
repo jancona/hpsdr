@@ -373,7 +373,11 @@ func (radio *Radio) receiveSamples() {
 		mm.EndPoint = metisEndpoint(buffer[3])
 		mm.SequenceNumber = binary.BigEndian.Uint32(buffer[4:8])
 		copy(mm.Frame1[:], buffer[8:8+512])
-		copy(mm.Frame2[:], buffer[8+512:l])
+		if l >= 8+512 {
+			copy(mm.Frame2[:], buffer[8+512:l])
+		} else {
+			log.Printf("receiveSamples: Short read: %d", l)
+		}
 
 		radio.receiverMutex.Lock()
 		s, err := radio.decodeSamples(mm.Frame1)
@@ -383,9 +387,11 @@ func (radio *Radio) receiveSamples() {
 		for n, r := range radio.receivers {
 			r.sampleFunc(s[n])
 		}
-		s, err = radio.decodeSamples(mm.Frame2)
-		if err != nil {
-			log.Printf("receiveSamples: error decoding Frame2 samples: %v", err)
+		if l >= 8+512 {
+			s, err = radio.decodeSamples(mm.Frame2)
+			if err != nil {
+				log.Printf("receiveSamples: error decoding Frame2 samples: %v", err)
+			}
 		}
 		for n, r := range radio.receivers {
 			r.sampleFunc(s[n])
