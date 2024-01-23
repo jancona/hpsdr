@@ -594,6 +594,10 @@ func (radio *Radio) deleteReceiver(rec *Receiver) {
 		if r == rec {
 			log.Printf("[DEBUG] Deleting receiver %#v", *rec)
 			radio.receivers = append(radio.receivers[:n], radio.receivers[n+1:]...)
+			for i := n ; i < len(radio.rxFrequency)-1 ; i++ {
+				radio.rxFrequency[i] = radio.rxFrequency[i+1]
+			}
+			radio.rxFrequency[len(radio.receivers)] = 0
 			return
 		}
 	}
