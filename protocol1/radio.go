@@ -593,7 +593,15 @@ func (radio *Radio) deleteReceiver(rec *Receiver) {
 	for n, r := range radio.receivers {
 		if r == rec {
 			log.Printf("[DEBUG] Deleting receiver %#v", *rec)
+			log.Printf("[DEBUG] radio.receivers: %#v, radio.rxFrequency: %#v before", radio.receivers, radio.rxFrequency)
+			// remove matching receiver and move following elements to the left
 			radio.receivers = append(radio.receivers[:n], radio.receivers[n+1:]...)
+			// radio.rxFrequency is a 12 element array instead of a slice, so we
+			// remove matching frequency and move following elements to the left, plus add a zero padding at the end
+			slice := append(append(radio.rxFrequency[:n], radio.rxFrequency[n+1:]...), 0)
+			// copy slice back into rxFrequency array
+			copy(radio.rxFrequency[:], slice)
+			log.Printf("[DEBUG] radio.receivers: %#v, radio.rxFrequency: %#v after", radio.receivers, radio.rxFrequency)
 			return
 		}
 	}
