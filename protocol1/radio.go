@@ -602,6 +602,9 @@ func (radio *Radio) deleteReceiver(rec *Receiver) {
 			// copy slice back into rxFrequency array
 			copy(radio.rxFrequency[:], slice)
 			log.Printf("[DEBUG] radio.receivers: %#v, radio.rxFrequency: %#v after", radio.receivers, radio.rxFrequency)
+			if n == 0 {
+				radio.SetTXFrequency(uint(radio.rxFrequency[n]))
+			}
 			return
 		}
 	}
