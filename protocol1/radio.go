@@ -564,8 +564,6 @@ func (radio *Radio) writeMessage(msg MetisMessage) error {
 
 // receiverIndex returns the ordinal index of the passed receiver, or -1 if the receiver is not valid
 func (radio *Radio) receiverIndex(rec *Receiver) int {
-	radio.receiverMutex.Lock()
-	defer radio.receiverMutex.Unlock()
 	for n, r := range radio.receivers {
 		if r == rec {
 			return n

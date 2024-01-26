@@ -28,6 +28,8 @@ type Receiver struct {
 
 // SetFrequency sets the receiver frequency
 func (rec *Receiver) SetFrequency(frequency uint) {
+	rec.radio.receiverMutex.Lock()
+	defer rec.radio.receiverMutex.Unlock()
 	index := rec.radio.receiverIndex(rec)
 	rec.radio.rxFrequency[index] = uint32(frequency)
 	if index == 0 {
@@ -37,6 +39,8 @@ func (rec *Receiver) SetFrequency(frequency uint) {
 
 // GetFrequency returns the receiver center frequency
 func (rec *Receiver) GetFrequency() uint {
+	rec.radio.receiverMutex.Lock()
+	defer rec.radio.receiverMutex.Unlock()
 	index := rec.radio.receiverIndex(rec)
 	return uint(rec.radio.rxFrequency[index])
 }
